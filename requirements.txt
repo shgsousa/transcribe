@@ -1,0 +1,8 @@
+torch==2.1.2
+torchaudio==2.1.2
+pyannote.audio==3.1.1
+numpy==1.26.4
+whisperx
+hf-transfer
+safetensors
+tqdm
