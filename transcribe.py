@@ -245,7 +245,8 @@ def main():
             use_auth_token=hf_token
         )
         
-        diarize_segments = diarize_model(audio_path)
+        with tqdm.tqdm(total=total_duration, desc="Diarizing speakers") as pbar:
+            diarize_segments = diarize_model(audio_path, hook=pbar.update)
         result = assign_speakers_to_segments(diarize_segments, result)
         
         print("Transcription complete.")
