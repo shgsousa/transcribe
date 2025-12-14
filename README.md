@@ -14,7 +14,7 @@ This script transcribes audio or video files using the WhisperX library and perf
 
 Before you begin, ensure you have the following installed and configured:
 
-1. **Python 3.10+**: Make sure you have a compatible version of Python installed.
+1. **Python 3.11**: Make sure you have a compatible version of Python installed.
 2. **ffmpeg**: The script requires `ffmpeg` to be installed and accessible in your system's PATH. You can download it from [ffmpeg.org](https://ffmpeg.org/download.html).
 3. **Hugging Face Account and Token**: Speaker diarization requires a model from Hugging Face.
     - Create an account on [Hugging Face](https://huggingface.co/).
@@ -29,17 +29,23 @@ Before you begin, ensure you have the following installed and configured:
 
 1. **Clone the repository or download the files.**
 
-2. **Install the required Python packages:**
-
-    It is highly recommended to use a virtual environment to avoid conflicts with other projects.
+2. **Install `uv`:**
 
     ```bash
-    # Create and activate a virtual environment (optional but recommended)
-    python -m venv .venv
-    source .venv/bin/activate  # On Windows, use `.venv\Scripts\activate`
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    ```
 
-    # Install dependencies
-    pip install -r requirements.txt
+3. **Install Python 3.11 and create a virtual environment:**
+
+    ```bash
+    uv python install 3.11
+    uv venv -p 3.11 .venv
+    ```
+
+4. **Install the required Python packages:**
+
+    ```bash
+    uv pip install -r requirements.txt
     ```
 
 ## Dependencies
