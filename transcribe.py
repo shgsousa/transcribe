@@ -8,6 +8,8 @@ import time
 import datetime
 from pathlib import Path
 import tqdm
+import json
+import pickle
 
 # --- Environment Setup for Accelerated Downloads ---
 os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
@@ -186,67 +188,116 @@ def main():
         audio = whisperx.load_audio(audio_path)
         
         # Transcribe
-        print("Transcribing audio (this may take a while)...")
-        # Use the underlying faster-whisper model to get a generator and progress info
-        segments_generator, info = model.model.transcribe(audio)
+        transcription_checkpoint = f"{base_filename}_transcript.json"
+        if os.path.exists(transcription_checkpoint):
+            print(f"Loading cached transcription from {transcription_checkpoint}...")
+            with open(transcription_checkpoint, "r", encoding="utf-8") as f:
+                result = json.load(f)
+        else:
+            print("Transcribing audio (this may take a while)...")
+            # Use the underlying faster-whisper model to get a generator and progress info
+            segments_generator, info = model.model.transcribe(audio)
 
-        # Use tqdm to display a progress bar based on audio duration
-        segments_list = []
-        total_duration = round(info.duration, 2)
-        last_progress = 0
-        with tqdm.tqdm(total=total_duration, desc="Transcribing segments") as pbar:
-            for segment in segments_generator:
-                segments_list.append(segment)
-                # Update progress bar to the end time of the current segment
-                pbar.update(round(segment.end - last_progress, 2))
-                last_progress = segment.end
-            # Ensure the progress bar is full upon completion
-            if last_progress < total_duration:
-                pbar.update(round(total_duration - last_progress, 2))
+            # Use tqdm to display a progress bar based on audio duration
+            segments_list = []
+            total_duration = round(info.duration, 2)
+            last_progress = 0
+            with tqdm.tqdm(total=total_duration, desc="Transcribing segments") as pbar:
+                for segment in segments_generator:
+                    segments_list.append(segment)
+                    # Update progress bar to the end time of the current segment
+                    pbar.update(round(segment.end - last_progress, 2))
+                    last_progress = segment.end
+                # Ensure the progress bar is full upon completion
+                if last_progress < total_duration:
+                    pbar.update(round(total_duration - last_progress, 2))
 
-        # Reconstruct the result object that the rest of the script expects
-        # This is the corrected line: convert named tuples to dictionaries
-        result = {"segments": [s._asdict() for s in segments_list], "language": info.language}
+            # Reconstruct the result object that the rest of the script expects
+            result = {"segments": [s._asdict() for s in segments_list], "language": info.language}
+            
+            # Save checkpoint
+            with open(transcription_checkpoint, "w", encoding="utf-8") as f:
+                json.dump(result, f, ensure_ascii=False, indent=2)
 
         # Align timestamps
-        print("Aligning timestamps...")
-        align_model_name = args.align_model
-        if align_model_name:
-            candidate_path = Path(align_model_name)
-            if candidate_path.exists():
-                align_model_name = str(candidate_path.resolve())
-        align_cache_dir = args.align_model_dir
-        if align_cache_dir:
-            align_cache_dir = str(Path(align_cache_dir).resolve())
-        model_a, metadata = whisperx.load_align_model(
-            language_code=result["language"],
-            device=device,
-            model_name=align_model_name,
-            model_dir=align_cache_dir,
-        )
-        result = whisperx.align(result["segments"], model_a, metadata, audio, device, return_char_alignments=False)
+        alignment_checkpoint = f"{base_filename}_aligned.json"
+        if os.path.exists(alignment_checkpoint):
+             print(f"Loading cached alignment from {alignment_checkpoint}...")
+             with open(alignment_checkpoint, "r", encoding="utf-8") as f:
+                result = json.load(f)
+        else:
+            print("Aligning timestamps...")
+            align_model_name = args.align_model
+            if align_model_name:
+                candidate_path = Path(align_model_name)
+                if candidate_path.exists():
+                    align_model_name = str(candidate_path.resolve())
+            align_cache_dir = args.align_model_dir
+            if align_cache_dir:
+                align_cache_dir = str(Path(align_cache_dir).resolve())
+            model_a, metadata = whisperx.load_align_model(
+                language_code=result["language"],
+                device=device,
+                model_name=align_model_name,
+                model_dir=align_cache_dir,
+            )
+            result = whisperx.align(result["segments"], model_a, metadata, audio, device, return_char_alignments=False)
+            
+            # Save checkpoint (aligned)
+            with open(alignment_checkpoint, "w", encoding="utf-8") as f:
+                json.dump(result, f, ensure_ascii=False, indent=2)
         
         # Diarize (identify speakers)
-        print("Identifying speakers...")
-        hf_token = os.environ.get("HF_TOKEN")
-        if hf_token is None:
-            print("\n--- HUGGING FACE TOKEN NOT FOUND ---")
-            print("This script requires a Hugging Face access token for speaker diarization.")
-            print("1. Go to https://huggingface.co/settings/tokens to create a token.")
-            print("2. Run the script again after setting the environment variable:")
-            print("   In PowerShell: $env:HF_TOKEN = \"your_token_here\"")
-            print("-------------------------------------\n")
-            return # Exit the function early
+        diarization_checkpoint = f"{base_filename}_diarization.pkl"
+        if os.path.exists(diarization_checkpoint):
+            print(f"Loading cached diarization from {diarization_checkpoint}...")
+            with open(diarization_checkpoint, "rb") as f:
+                diarize_segments = pickle.load(f)
+        else:
+            print("Identifying speakers...")
+            hf_token = os.environ.get("HF_TOKEN")
+            if hf_token is None:
+                print("\n--- HUGGING FACE TOKEN NOT FOUND ---")
+                print("This script requires a Hugging Face access token for speaker diarization.")
+                print("1. Go to https://huggingface.co/settings/tokens to create a token.")
+                print("2. Run the script again after setting the environment variable:")
+                print("   In PowerShell: $env:HF_TOKEN = \"your_token_here\"")
+                print("-------------------------------------\n")
+                return # Exit the function early
 
-        print("Using Hugging Face token to download speaker diarization models.")
-        # Use pyannote.audio speaker-diarization-3.1 directly instead of WhisperX wrapper
-        diarize_model = Pipeline.from_pretrained(
-            "pyannote/speaker-diarization-3.1",
-            use_auth_token=hf_token
-        )
-        
-        with tqdm.tqdm(total=total_duration, desc="Diarizing speakers") as pbar:
-            diarize_segments = diarize_model(audio_path, hook=pbar.update)
+            print("Using Hugging Face token to download speaker diarization models.")
+            # Use pyannote.audio speaker-diarization-3.1 directly instead of WhisperX wrapper
+            diarize_model = Pipeline.from_pretrained(
+                "pyannote/speaker-diarization-3.1",
+                use_auth_token=hf_token
+            )
+            
+            # Helper for tqdm using the correct signature for pyannote hook
+            def progress_hook(step_name, step_artifact, file=None, total=None, completed=None):
+                if completed is not None:
+                     # If total is known, set it
+                     if total is not None and pbar.total != total:
+                         pbar.reset(total=total)
+                     pbar.update(completed - pbar.n)
+
+            # We use an estimation for total if not provided by the hook initially, but pyannote usually provides it.
+            # Using a manual total from audio duration might not match exactly what pyannote counts (chunks vs time),
+            # but usually it's time.
+            # However, safe bet is to let the hook manage it or just be robust.
+            
+            # Note: total_duration is defined in the transcription block. Ensure it's available here.
+            # If transcription was loaded from cache, we might not have 'total_duration'. 
+            # We can re-calculate it or just rely on updates.
+            # For simplicity, we'll try to get duration from result if not set.
+            current_duration = result["segments"][-1]["end"] if result["segments"] else 0
+            
+            with tqdm.tqdm(total=current_duration, desc="Diarizing speakers", unit="s") as pbar:
+                diarize_segments = diarize_model(audio_path, hook=progress_hook)
+            
+            # Save checkpoint
+            with open(diarization_checkpoint, "wb") as f:
+                pickle.dump(diarize_segments, f)
+
         result = assign_speakers_to_segments(diarize_segments, result)
         
         print("Transcription complete.")
@@ -263,8 +314,19 @@ def main():
     generate_output_files(result, base_filename)
 
     # --- 5. Cleanup ---
-    print("Cleaning up temporary audio file...")
-    os.remove(audio_path)
+    print("Cleaning up temporary files...")
+    if os.path.exists(audio_path):
+        os.remove(audio_path)
+    
+    # Remove checkpoint files
+    checkpoints = [
+        f"{base_filename}_transcript.json",
+        f"{base_filename}_aligned.json",
+        f"{base_filename}_diarization.pkl"
+    ]
+    for checkpoint in checkpoints:
+        if os.path.exists(checkpoint):
+            os.remove(checkpoint)
     
     print("Process finished successfully.")
 
